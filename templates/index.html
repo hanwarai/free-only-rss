@@ -9,6 +9,9 @@
 <body>
 <div class="container">
     <h1>freeonly-rss</h1>
+    <div class="mt-4 right">
+        <span class="btn btn-sm btn-primary" onClick="navigator.clipboard.writeText('/feed subscribe https://hanwarai.github.io/free-only-rss/rss.xml');">/feed subscribe</span>
+    </div>
     {% for site in sites %}
     <div class="mt-4">
         <h2>{{ site['title'] }}</h2>
