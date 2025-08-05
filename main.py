@@ -1,5 +1,6 @@
 import os
 import re
+from datetime import datetime
 
 import feedgenerator
 import requests
@@ -34,7 +35,8 @@ for series in soup.find_all('li', class_="daily-series-item"):
         title=title,
         link='https://comic-days.com/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://comic-days.com/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': 'COMIC DAYS', 'feeds': feeds})
@@ -57,7 +59,8 @@ for series in soup.find_all('li', class_='series-list-item'):
         title=title,
         link='https://shonenjumpplus.com/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://shonenjumpplus.com/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': '少年ジャンプ＋', 'feeds': feeds})
@@ -80,7 +83,8 @@ for series in soup.find_all('li', class_='webry-series-item'):
         title=title,
         link='https://www.sunday-webry.com/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://www.sunday-webry.com/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': 'サンデーうぇぶり', 'feeds': feeds})
@@ -103,7 +107,8 @@ for series in soup.find_all('li', class_="subpage-table-list-item"):
         title=title,
         link='https://tonarinoyj.jp/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://tonarinoyj.jp/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': 'となりのヤングジャンプ', 'feeds': feeds})
@@ -126,7 +131,8 @@ for series in soup.find_all('li', class_="page-series-list-item"):
         title=title,
         link='https://kuragebunch.com/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://kuragebunch.com/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': 'くらげバンチ', 'feeds': feeds})
@@ -149,7 +155,8 @@ for series in soup.find_all('li', class_="series-section-item"):
         title=title,
         link='https://comic-gardo.com/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://comic-gardo.com/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': 'コミックガルド', 'feeds': feeds})
@@ -172,7 +179,8 @@ for series in soup.find_all('li', class_=re.compile('^SeriesListItem_item__')):
         title=title,
         link='https://comic-action.com/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://comic-action.com/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': 'Webアクション', 'feeds': feeds})
@@ -195,7 +203,8 @@ for series in soup.select('ul[class^=SeriesList_series_list__] li'):
         title=title,
         link='https://comic-earthstar.com/rss/series/' + series_id + '?free_only=1',
         description="",
-        content=""
+        content="",
+        updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
     )
     feeds.append({'title': title, 'url': 'https://comic-earthstar.com/rss/series/' + series_id + '?free_only=1'})
 sites.append({'title': 'コミック アース・スター', 'feeds': feeds})
