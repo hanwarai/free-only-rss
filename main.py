@@ -161,7 +161,7 @@ with scrape('コミックガルド'):
     feeds = []
     unique_ids = []
     for series in soup.find_all('li', class_="series-section-item"):
-        series_id = series.get('class')[-1].replace('s', '')
+        series_id = series.get('class')[-1].removeprefix('s')
         if series_id in unique_ids:
             continue
         unique_ids.append(series_id)
@@ -228,7 +228,7 @@ with scrape('コミック アース・スター'):
     sites.append({'title': 'コミック アース・スター', 'feeds': feeds})
 
 # rss feed
-with open('feeds/rss.xml', 'w') as fp:
+with open('feeds/rss.xml', 'w', encoding='utf-8') as fp:
     rss.write(fp, 'utf-8')
 
 # Generate index.html
@@ -237,5 +237,5 @@ jinja_env = Environment(
     autoescape=True
 )
 jinja_template = jinja_env.get_template('index.html')
-with open('feeds/index.html', 'w') as index:
+with open('feeds/index.html', 'w', encoding='utf-8') as index:
     index.write(jinja_template.render(sites=sites))
