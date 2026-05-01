@@ -10,7 +10,7 @@
 <div class="container">
     <h1>freeonly-rss</h1>
     <div class="mt-4 right">
-        <span class="btn btn-sm btn-primary" onClick="navigator.clipboard.writeText('/feed subscribe https://hanwarai.github.io/free-only-rss/rss.xml');">/feed subscribe</span>
+        <span class="btn btn-sm btn-primary copy-btn" data-cmd="/feed subscribe https://hanwarai.github.io/free-only-rss/rss.xml">/feed subscribe</span>
     </div>
     {% for site in sites %}
     <div class="mt-4">
@@ -19,7 +19,7 @@
             {% for feed in site['feeds'] %}
             <li class="list-group-item d-flex justify-content-between align-items-center">
                 <div>{{ feed['title'] }}</div>
-                <span class="btn btn-sm btn-primary" onClick="navigator.clipboard.writeText('/feed subscribe {{ feed['url'] }}');">/feed subscribe</span>
+                <span class="btn btn-sm btn-primary copy-btn" data-cmd="/feed subscribe {{ feed['url'] }}">/feed subscribe</span>
             </li>
             {% endfor %}
         </ul>
@@ -27,5 +27,10 @@
     {% endfor %}
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz" crossorigin="anonymous"></script>
+<script>
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+        btn.addEventListener('click', () => navigator.clipboard.writeText(btn.dataset.cmd));
+    });
+</script>
 </body>
 </html>
