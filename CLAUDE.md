@@ -15,11 +15,13 @@ The publishers covered (and their selectors) are hard-coded as repeated blocks i
 | サンデーうぇぶり | `/series` | `li.webry-series-item` | parsed from `img[data-src]` URL |
 | となりのヤングジャンプ | `/series` | `li.subpage-table-list-item` | `id="series-..."` |
 | くらげバンチ | `/series/kuragebunch` | `li.page-series-list-item` | parsed from `img[data-src]` URL |
-| コミックガルド | `/series` | `li.series-section-item` | last class token, strip `s` prefix |
+| コミックガルド | `/series` | `li` whose only class matches `^s\d+$` | that same class token, strip `s` prefix |
 | Webアクション | `/series` | `li[class^="SeriesListItem_item__"]` | parsed from `img[src]` URL |
 | コミック アース・スター | `/series` | `ul[class^="SeriesList_series_list__"] li` | parsed from `img[src]` URL |
 
 Sites that use hashed CSS module class names (Webアクション, コミック アース・スター) require prefix matching (`re.compile('^...')` / `[class^=...]`) — these classes change between deploys of the upstream site, so a hardcoded full class name will break silently. The two URL-shape variants (`%2F`-encoded vs raw `/`) reflect what each upstream actually emits; do not "normalize" them.
+
+コミックガルド went the same way but its `li` carries no `SeriesListItem_*` class at all — the hashed classes sit on the children, and the `li`'s only class is `s{series_id}`. That token is derived from the series id rather than from a build hash, so it is the one stable anchor on the page; match the `li` on `^s\d+$` rather than on anything hashed.
 
 ## Commands
 
@@ -31,7 +33,7 @@ uv run main.py       # scrape all 8 sites and write feeds/rss.xml + feeds/index.
 SSL_VERIFY=False uv run main.py   # disable TLS verification (debugging only)
 ```
 
-There are no tests, linters, or formatters configured. CI runs only `uv run main.py` and uploads `feeds/` as a Pages artifact.
+There are no tests, linters, or formatters configured. CI runs only `uv run main.py`. On `push` to `main` and on the 12-hour cron it also uploads `feeds/` as a Pages artifact and publishes it; on `pull_request` the `build` job runs the scrape as a check but the artifact upload and the `publish` job are skipped, so a PR never touches Pages.
 
 ## Architecture Notes
 
@@ -39,6 +41,7 @@ There are no tests, linters, or formatters configured. CI runs only `uv run main
 - All entries are added to a single `feedgenerator.Atom1Feed` with a constant `updateddate` of `2025-01-01`. This is intentional: the feed exists to advertise per-series subscription URLs, not to signal "new" series — readers should not re-fetch entries on date changes.
 - `feeds/.gitkeep` is the only checked-in file under `feeds/`. The generated `rss.xml` and `index.html` are never committed; they live only as the Pages artifact.
 - `unique_ids` per-block dedupe is required because some series pages render the same series in multiple sections (e.g. recommended + alphabetical).
+- `main.py` ends by printing a per-publisher series count and emitting a `[WARN]` (plus a GitHub Actions `::warning::` annotation under CI) for any publisher that yielded nothing. `scrape()` only swallows exceptions, so a selector that stops matching produces zero items and no error — コミックガルド silently dropped out of the feed that way. The run deliberately still exits 0 so a single broken publisher does not block publishing the other seven.
 
 ## When Adding a New Publisher
 
