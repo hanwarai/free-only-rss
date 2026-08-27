@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  # PR でも build ジョブだけ回して検証する。publish は push / schedule のみ。
+  # これが無いと Dependabot PR が一度も CI を通らないまま merge されてしまう。
+  pull_request:
   schedule:
     - cron: "0 */12 * * *"
 
@@ -48,12 +51,14 @@ jobs:
         run: uv run main.py
 
       - name: Deploy
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5
         with:
           path: feeds
 
   publish:
     needs: build
+    if: github.event_name != 'pull_request'
     permissions:
       pages: write
       id-token: write
