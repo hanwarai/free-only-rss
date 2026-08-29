@@ -1,0 +1,61 @@
+# Pull Request 用の品質ゲート。
+# デプロイ用の gh-pages.yaml は push / schedule でしか走らないため、
+# PR (特に Dependabot PR) が未検証のまま滞留するのを防ぐ目的で分離している。
+# スクレイピング (main.py) と Pages デプロイは行わない。8 社の一覧ページへ実際に
+# アクセスすると PR の可否が外部サイトの可用性に左右されるため、実フェッチの検証は
+# main への push と 12 時間ごとの schedule 実行に任せる。
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ジョブ名 check は main ブランチの required status check として登録してある。
+  # 改名すると必須チェックが外れて未検証のまま自動マージされるので変えないこと。
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # uv 本体のバージョンは pyproject.toml の [dependency-groups] ci にピンしてあり、
+      # Dependabot (uv エコシステム) がそれを bump する。解決ロジックは ci.yaml と
+      # gh-pages.yaml で共有するためスクリプトに切り出してある
+      # (仕様は tests/test_resolve_uv_version.py が固定)。
+      - name: Resolve uv version
+        id: uv-version
+        run: .github/scripts/resolve-uv-version.sh >> "$GITHUB_OUTPUT"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ steps.uv-version.outputs.version }}
+          enable-cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version-file: "pyproject.toml"
+
+      # --locked: `--frozen` は uv.lock を使うだけで pyproject.toml との整合性を検証しない。
+      # Dependabot PR の lock ずれはここでしか検出できないため --locked を使う。
+      - name: Install the project
+        run: uv sync --locked --all-extras
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Run tests
+        run: uv run pytest

@@ -1,267 +1,362 @@
+"""8 つのウェブマンガ出版社のシリーズ一覧を巡回し、各シリーズの `?free_only=1`
+付き RSS URL を 1 本の Atom フィード (feeds/rss.xml) と HTML 索引
+(feeds/index.html) にまとめる。
+
+出版社ごとに parse_* 関数を 1 つ持つ構成にしてある。上流の HTML が変わったら
+その 1 関数だけを直せばよく、フィクスチャを使ったテストもそこだけで閉じる。
+セレクタや ID の取り出し方を共通テーブルに畳まないのは意図的で、
+出版社ごとの差 (`%2F` エンコード済み URL と生の `/` など) を残すため。
+"""
+
 import os
 import re
 import sys
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import feedgenerator
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from jinja2 import Environment, FileSystemLoader
 
-SSL_VERIFY = os.getenv('SSL_VERIFY', 'True') == 'True'
-GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
-sites = []
-# scrape() を通った出版社。末尾のサマリで sites と突き合わせ、
-# 例外で落ちた場合と 0 件だった場合の両方を検知するために使う。
-scraped = []
+OUTPUT_DIR = Path("feeds")
+TEMPLATE_DIR = Path("templates")
+SITE_URL = "https://hanwarai.github.io/free-only-rss/"
+REQUEST_TIMEOUT = 10
+
+# 全エントリ共通の固定日付。このフィードは「新着シリーズ」を知らせるものではなく
+# シリーズ別購読 URL のカタログなので、日付が動いてリーダーに再取得させたくない。
+UPDATED_DATE = datetime(2025, 1, 1)
+
+# コミックガルドの li が持つ唯一のクラス。`s{series_id}` は series id 由来で
+# ビルドハッシュではないため、CSS Modules 化した現行 HTML で唯一安定した足場。
+GARDO_ID_CLASS = re.compile(r"^s([0-9]+)$")
 
 
-@contextmanager
-def scrape(label):
-    scraped.append(label)
+@dataclass(frozen=True)
+class Series:
+    """1 シリーズ分の購読情報。"""
+
+    series_id: str
+    title: str
+
+
+@dataclass(frozen=True)
+class Publisher:
+    """1 出版社分の巡回定義。"""
+
+    label: str
+    list_url: str
+    feed_host: str
+    parse: Callable[[str], list[Series]]
+
+    def feed_url(self, series_id: str) -> str:
+        """シリーズ別 RSS の URL。`?free_only=1` がこのプロジェクトの本体。"""
+        return f"{self.feed_host}/rss/series/{series_id}?free_only=1"
+
+
+#
+# HTML から必須要素を取り出すヘルパー。
+#
+# いずれも「見つからなければ例外」で統一している。セレクタが上流の変更で外れた
+# ことを黙って 0 件や None 混じりのエントリとして通さず、その出版社の取得失敗
+# として scrape() に握らせるため。
+#
+def _tag(element: Tag, name: str, **attrs: Any) -> Tag:
+    found = element.find(name, **attrs)
+    if not isinstance(found, Tag):
+        raise LookupError(f"<{name}> が見つからない: {element!s:.120}")
+    return found
+
+
+def _text(element: Tag, name: str, **attrs: Any) -> str:
+    return _tag(element, name, **attrs).text.strip()
+
+
+def _attr(element: Tag, name: str) -> str:
+    value = element.get(name)
+    if not isinstance(value, str):
+        raise LookupError(f"属性 {name} が見つからない: {element!s:.120}")
+    return value
+
+
+def _img_attr(element: Tag, name: str) -> str:
+    return _attr(_tag(element, "img"), name)
+
+
+def _class_group(element: Tag, pattern: re.Pattern[str]) -> str:
+    """pattern に完全一致するクラストークンの 1 つ目のキャプチャを返す。"""
+    classes: str | list[str] = element.get("class") or []
+    tokens = classes.split() if isinstance(classes, str) else classes
+    for token in tokens:
+        matched = pattern.fullmatch(token)
+        if matched:
+            return matched.group(1)
+    raise LookupError(f"{pattern.pattern} に一致するクラスがない: {element!s:.120}")
+
+
+#
+# 出版社ごとのパーサ。1 出版社 1 関数。
+#
+def parse_comic_days(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_attr(item, "data-series-id"), _text(item, "h4", class_="daily-series-title"))
+        for item in soup.find_all("li", class_="daily-series-item")
+    )
+
+
+def parse_shonenjumpplus(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_id_from_url(_img_attr(item, "data-src"), "%2F"), _text(item, "h2"))
+        for item in soup.find_all("li", class_="series-list-item")
+    )
+
+
+def parse_sunday_webry(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_id_from_url(_img_attr(item, "data-src"), "%2F"), _text(item, "h4"))
+        for item in soup.find_all("li", class_="webry-series-item")
+    )
+
+
+def parse_tonarinoyj(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_attr(item, "id").replace("series-", ""), _text(item, "h4", class_="title"))
+        for item in soup.find_all("li", class_="subpage-table-list-item")
+    )
+
+
+def parse_kuragebunch(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_id_from_url(_img_attr(item, "data-src"), "%2F"), _text(item, "h4"))
+        for item in soup.find_all("li", class_="page-series-list-item")
+    )
+
+
+def parse_comic_gardo(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_class_group(item, GARDO_ID_CLASS), _text(item, "h5"))
+        for item in soup.find_all("li", class_=GARDO_ID_CLASS)
+    )
+
+
+def parse_comic_action(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_id_from_url(_img_attr(item, "src"), "%2F"), _text(item, "h3"))
+        for item in soup.find_all("li", class_=re.compile("^SeriesListItem_item__"))
+    )
+
+
+def parse_comic_earthstar(html: str) -> list[Series]:
+    soup = BeautifulSoup(html, "html.parser")
+    return _dedupe(
+        Series(_id_from_url(_img_attr(item, "src"), "/"), _text(item, "h3"))
+        for item in soup.select("ul[class^=SeriesList_series_list__] li")
+    )
+
+
+def _id_from_url(url: str, separator: str) -> str:
+    """サムネイル URL の末尾セグメントから series id を取り出す。
+
+    区切りが `%2F` と `/` の 2 種類あるのは上流がそれぞれそう出しているため。
+    どちらかに正規化しないこと。
+    """
+    return url.rsplit(separator, maxsplit=1)[-1].split("-", maxsplit=1)[0]
+
+
+def _dedupe(series: Iterable[Series]) -> list[Series]:
+    """同じ series_id の重複を落とす。初出の順序は保つ。
+
+    一覧ページによっては同じシリーズをおすすめ枠と五十音順枠の両方に出す。
+    """
+    unique: dict[str, Series] = {}
+    for item in series:
+        unique.setdefault(item.series_id, item)
+    return list(unique.values())
+
+
+PUBLISHERS: tuple[Publisher, ...] = (
+    Publisher(
+        "COMIC DAYS",
+        "https://comic-days.com/series",
+        "https://comic-days.com",
+        parse_comic_days,
+    ),
+    Publisher(
+        "少年ジャンプ＋",
+        "https://shonenjumpplus.com/series",
+        "https://shonenjumpplus.com",
+        parse_shonenjumpplus,
+    ),
+    Publisher(
+        "サンデーうぇぶり",
+        "https://www.sunday-webry.com/series",
+        "https://www.sunday-webry.com",
+        parse_sunday_webry,
+    ),
+    Publisher(
+        "となりのヤングジャンプ",
+        "https://tonarinoyj.jp/series",
+        "https://tonarinoyj.jp",
+        parse_tonarinoyj,
+    ),
+    Publisher(
+        "くらげバンチ",
+        "https://kuragebunch.com/series/kuragebunch",
+        "https://kuragebunch.com",
+        parse_kuragebunch,
+    ),
+    Publisher(
+        "コミックガルド",
+        "https://comic-gardo.com/series",
+        "https://comic-gardo.com",
+        parse_comic_gardo,
+    ),
+    Publisher(
+        "Webアクション",
+        "https://comic-action.com/series",
+        "https://comic-action.com",
+        parse_comic_action,
+    ),
+    Publisher(
+        "コミック アース・スター",
+        "https://comic-earthstar.com/series",
+        "https://comic-earthstar.com",
+        parse_comic_earthstar,
+    ),
+)
+
+# 出版社ごとの取得結果。None は取得失敗 (例外)、空リストは 0 件 (selector 脱落)。
+ScrapeResult = list[tuple[Publisher, list[Series] | None]]
+
+
+def fetch(url: str, *, ssl_verify: bool = True) -> str:
+    response = requests.get(
+        url,
+        verify=ssl_verify,
+        timeout=REQUEST_TIMEOUT,
+        headers={"User-Agent": ""},
+    )
+    # エラーページを HTML として食わせると 0 件になり「selector が外れた」と
+    # 誤診する。HTTP エラーは取得失敗としてここで分ける。
+    response.raise_for_status()
+    return response.text
+
+
+def scrape(publisher: Publisher, *, ssl_verify: bool = True) -> list[Series] | None:
     try:
-        yield
-    except Exception as e:
-        print(f'[ERROR] {label}: {type(e).__name__}: {e}', file=sys.stderr)
+        return publisher.parse(fetch(publisher.list_url, ssl_verify=ssl_verify))
+    except Exception as error:
+        print(f"[ERROR] {publisher.label}: {type(error).__name__}: {error}", file=sys.stderr)
+        return None
 
-rss = feedgenerator.Atom1Feed(
-    title='free-only-rss',
-    link='https://hanwarai.github.io/free-only-rss/',
-    description='',
-    language="ja",
-)
 
-#
-# COMIC DAYS
-#
-with scrape('COMIC DAYS'):
-    site = requests.get('https://comic-days.com/series', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    for series in soup.find_all('li', class_="daily-series-item"):
-        series_id = series.get('data-series-id')
-        if series_id in unique_ids:
+def collect(publishers: Sequence[Publisher], *, ssl_verify: bool = True) -> ScrapeResult:
+    return [(publisher, scrape(publisher, ssl_verify=ssl_verify)) for publisher in publishers]
+
+
+def build_feed(results: ScrapeResult) -> tuple[feedgenerator.Atom1Feed, list[dict[str, Any]]]:
+    """Atom フィードと index.html 用の出版社リストを組み立てる。"""
+    rss = feedgenerator.Atom1Feed(
+        title="free-only-rss",
+        link=SITE_URL,
+        description="",
+        language="ja",
+    )
+    sites: list[dict[str, Any]] = []
+    for publisher, series_list in results:
+        if series_list is None:
             continue
-        unique_ids.append(series_id)
-        title = series.find('h4', class_='daily-series-title').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://comic-days.com/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://comic-days.com/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': 'COMIC DAYS', 'feeds': feeds})
+        feeds = []
+        for series in series_list:
+            url = publisher.feed_url(series.series_id)
+            rss.add_item(
+                unique_id=series.series_id,
+                title=series.title,
+                link=url,
+                description="",
+                content="",
+                updateddate=UPDATED_DATE,
+            )
+            feeds.append({"title": series.title, "url": url})
+        sites.append({"title": publisher.label, "feeds": feeds})
+    return rss, sites
 
-#
-# 少年ジャンプ＋
-#
-with scrape('少年ジャンプ＋'):
-    site = requests.get('https://shonenjumpplus.com/series', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    for series in soup.find_all('li', class_='series-list-item'):
-        series_id = series.find('img').get('data-src').split('%2F')[-1].split('-')[0]
-        if series_id in unique_ids:
+
+def report(results: ScrapeResult, *, github_actions: bool = False) -> list[str]:
+    """出版社ごとの件数を出し、問題のあった出版社の label を返す。
+
+    scrape() は例外しか握らないので「selector が外れて 0 件」は素通りする。
+    実際コミックガルドはこれで無言のままフィードから欠落していた。1 社壊れても
+    残りの配信は続けたいので run は落とさず、警告として可視化するに留める。
+    """
+    problems = []
+    for publisher, series_list in results:
+        count = 0 if series_list is None else len(series_list)
+        print(f"{publisher.label}: {count} series")
+        if count:
             continue
-        unique_ids.append(series_id)
-        title = series.find('h2').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://shonenjumpplus.com/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://shonenjumpplus.com/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': '少年ジャンプ＋', 'feeds': feeds})
+        if series_list is None:
+            reason = "取得失敗 — 上の [ERROR] を参照"
+        else:
+            reason = "0 件 — selector が上流の HTML 変更で外れた可能性"
+        problems.append(publisher.label)
+        print(f"[WARN] {publisher.label}: {reason}", file=sys.stderr)
+        if github_actions:
+            print(f"::warning title={publisher.label}::{reason}")
+    return problems
 
-#
-# サンデーうぇぶり
-#
-with scrape('サンデーうぇぶり'):
-    site = requests.get('https://www.sunday-webry.com/series', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    for series in soup.find_all('li', class_='webry-series-item'):
-        series_id = series.find('img').get('data-src').split('%2F')[-1].split('-')[0]
-        if series_id in unique_ids:
-            continue
-        unique_ids.append(series_id)
-        title = series.find('h4').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://www.sunday-webry.com/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://www.sunday-webry.com/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': 'サンデーうぇぶり', 'feeds': feeds})
 
-#
-# となりのヤングジャンプ
-#
-with scrape('となりのヤングジャンプ'):
-    site = requests.get('https://tonarinoyj.jp/series', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    for series in soup.find_all('li', class_="subpage-table-list-item"):
-        series_id = series.get('id').replace('series-', '')
-        if series_id in unique_ids:
-            continue
-        unique_ids.append(series_id)
-        title = series.find('h4', class_='title').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://tonarinoyj.jp/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://tonarinoyj.jp/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': 'となりのヤングジャンプ', 'feeds': feeds})
+def emit_github_output(problems: Sequence[str]) -> None:
+    """問題のあった出版社をステップ出力に流す。
 
-#
-# くらげバンチ
-#
-with scrape('くらげバンチ'):
-    site = requests.get('https://kuragebunch.com/series/kuragebunch', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    for series in soup.find_all('li', class_="page-series-list-item"):
-        series_id = series.find('img').get('data-src').split('%2F')[-1].split('-')[0]
-        if series_id in unique_ids:
-            continue
-        unique_ids.append(series_id)
-        title = series.find('h4').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://kuragebunch.com/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://kuragebunch.com/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': 'くらげバンチ', 'feeds': feeds})
+    ワークフロー側がこれを見て追跡 Issue を立てる。run 自体は成功で終わるため、
+    failure() を条件にした通知ではこの経路を拾えない。
+    """
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if not github_output:
+        return
+    with Path(github_output).open("a", encoding="utf-8") as handle:
+        handle.write(f"problems={','.join(problems)}\n")
 
-#
-# コミックガルド
-#
-with scrape('コミックガルド'):
-    site = requests.get('https://comic-gardo.com/series', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    # 上流が CSS Modules 化し series-section-item / series-title は消えた。
-    # li 側に残るクラスは series id 由来の `s{id}` ただ 1 個 (SeriesListItem_* は子要素側)。
-    # これはハッシュ付きクラスと違いデプロイ間で変わらないので、ここを基準にする。
-    for series in soup.find_all('li', class_=re.compile('^s[0-9]+$')):
-        series_id = series.get('class')[-1].removeprefix('s')
-        if series_id in unique_ids:
-            continue
-        unique_ids.append(series_id)
-        title = series.find('h5').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://comic-gardo.com/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://comic-gardo.com/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': 'コミックガルド', 'feeds': feeds})
 
-#
-# Webアクション
-#
-with scrape('Webアクション'):
-    site = requests.get('https://comic-action.com/series', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    for series in soup.find_all('li', class_=re.compile('^SeriesListItem_item__')):
-        series_id = series.find('img').get('src').split('%2F')[-1].split('-')[0]
-        if series_id in unique_ids:
-            continue
-        unique_ids.append(series_id)
-        title = series.find('h3').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://comic-action.com/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://comic-action.com/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': 'Webアクション', 'feeds': feeds})
+def write_outputs(
+    rss: feedgenerator.Atom1Feed,
+    sites: Sequence[dict[str, Any]],
+    output_dir: Path = OUTPUT_DIR,
+    template_dir: Path = TEMPLATE_DIR,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "rss.xml").open("w", encoding="utf-8") as feed_file:
+        rss.write(feed_file, "utf-8")
 
-#
-# コミック アース・スター
-#
-with scrape('コミック アース・スター'):
-    site = requests.get('https://comic-earthstar.com/series', verify=SSL_VERIFY, timeout=10, headers={'User-Agent': ''})
-    soup = BeautifulSoup(site.text, 'html.parser')
-    feeds = []
-    unique_ids = []
-    for series in soup.select('ul[class^=SeriesList_series_list__] li'):
-        series_id = series.find('img').get('src').split('/')[-1].split('-')[0]
-        if series_id in unique_ids:
-            continue
-        unique_ids.append(series_id)
-        title = series.find('h3').text.strip()
-        rss.add_item(
-            unique_id=series_id,
-            title=title,
-            link='https://comic-earthstar.com/rss/series/' + series_id + '?free_only=1',
-            description="",
-            content="",
-            updateddate=datetime.strptime('2025-01-01T00:00:00', '%Y-%m-%dT%H:%M:%S')
-        )
-        feeds.append({'title': title, 'url': 'https://comic-earthstar.com/rss/series/' + series_id + '?free_only=1'})
-    sites.append({'title': 'コミック アース・スター', 'feeds': feeds})
+    jinja_env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=True)
+    rendered = jinja_env.get_template("index.html").render(sites=sites)
+    (output_dir / "index.html").write_text(rendered, encoding="utf-8")
 
-#
-# 取得結果サマリ
-#
-# scrape() は例外しか握らないので「selector が外れて 0 件ヒット」は素通りする。
-# 実際コミックガルドはこれで無言のまま feed から欠落していた。部分的にでも
-# 配信は続けたいので run は落とさず、警告として可視化するに留める。
-found = {site['title']: len(site['feeds']) for site in sites}
-for label in scraped:
-    count = found.get(label, 0)
-    print(f'{label}: {count} series')
-    if count:
-        continue
-    # sites に載っていない = 例外で中断。載っていて 0 件 = selector が外れた。
-    reason = '0 件 — selector が上流の HTML 変更で外れた可能性' if label in found else '取得失敗 — 上の [ERROR] を参照'
-    print(f'[WARN] {label}: {reason}', file=sys.stderr)
-    if GITHUB_ACTIONS:
-        print(f'::warning title={label}::{reason}')
 
-# rss feed
-with open('feeds/rss.xml', 'w', encoding='utf-8') as fp:
-    rss.write(fp, 'utf-8')
+def main() -> int:
+    ssl_verify = os.getenv("SSL_VERIFY", "True") == "True"
+    github_actions = os.getenv("GITHUB_ACTIONS") == "true"
 
-# Generate index.html
-jinja_env = Environment(
-    loader=FileSystemLoader('templates'),
-    autoescape=True
-)
-jinja_template = jinja_env.get_template('index.html')
-with open('feeds/index.html', 'w', encoding='utf-8') as index:
-    index.write(jinja_template.render(sites=sites))
+    results = collect(PUBLISHERS, ssl_verify=ssl_verify)
+    rss, sites = build_feed(results)
+    problems = report(results, github_actions=github_actions)
+    emit_github_output(problems)
+    write_outputs(rss, sites)
+    # 1 社壊れても残り 7 社の配信は続けたいので、意図して exit 0 のままにする。
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
