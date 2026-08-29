@@ -1,7 +1,7 @@
 [project]
 name = "freeonly-rss"
 version = "0.1.0"
-description = "Add your description here"
+description = "Atom feed of per-series ?free_only=1 RSS URLs for 8 Japanese web-manga publishers"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -13,6 +13,71 @@ dependencies = [
 
 [dependency-groups]
 # uv 本体のバージョンピン。Dependabot (uv エコシステム) がこの行を bump し、
-# CI (.github/workflows/gh-pages.yaml) が setup-uv に渡す version をここから読む。
+# CI (.github/scripts/resolve-uv-version.sh) が setup-uv に渡す version をここから読む。
 # 既定グループではないため `uv sync` で venv にはインストールされない。
 ci = ["uv==0.12.5"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-cov>=6",
+    "requests-mock>=1.12.1",
+    "mypy>=2.3.0",
+    "ruff>=0.16.4",
+    "pre-commit>=4.6.2",
+    "types-requests>=2.33.0.20260712",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --cov=main --cov-report=term-missing --cov-fail-under=80"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C90", # mccabe complexity
+    "RUF",
+    "PTH", # use pathlib
+    "PL",  # pylint
+]
+
+# 全角の＋（）は出版社名や日本語コメントの原文。ASCII に直すと別物になるので
+# RUF001/002/003 の confusable 判定から除外する。
+allowed-confusables = ["＋", "（", "）"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR2004", "PLR0913"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.13"
+files = ["main.py", "tests"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["feedgenerator"]
+ignore_missing_imports = true
