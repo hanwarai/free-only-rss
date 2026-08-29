@@ -317,19 +317,6 @@ def report(results: ScrapeResult, *, github_actions: bool = False) -> list[str]:
     return problems
 
 
-def emit_github_output(problems: Sequence[str]) -> None:
-    """問題のあった出版社をステップ出力に流す。
-
-    ワークフロー側がこれを見て追跡 Issue を立てる。run 自体は成功で終わるため、
-    failure() を条件にした通知ではこの経路を拾えない。
-    """
-    github_output = os.environ.get("GITHUB_OUTPUT")
-    if not github_output:
-        return
-    with Path(github_output).open("a", encoding="utf-8") as handle:
-        handle.write(f"problems={','.join(problems)}\n")
-
-
 def write_outputs(
     rss: feedgenerator.Atom1Feed,
     sites: Sequence[dict[str, Any]],
@@ -351,8 +338,7 @@ def main() -> int:
 
     results = collect(PUBLISHERS, ssl_verify=ssl_verify)
     rss, sites = build_feed(results)
-    problems = report(results, github_actions=github_actions)
-    emit_github_output(problems)
+    report(results, github_actions=github_actions)
     write_outputs(rss, sites)
     # 1 社壊れても残り 7 社の配信は続けたいので、意図して exit 0 のままにする。
     return 0
