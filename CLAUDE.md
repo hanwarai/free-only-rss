@@ -38,12 +38,13 @@ uv run mypy          # type check
 uv run pre-commit install   # run ruff + mypy on every commit
 ```
 
-Two workflows:
+Three workflows:
 
-- `.github/workflows/ci.yaml` runs on `pull_request` — lint, format check, mypy, pytest. It deliberately does **not** run `uv run main.py`: hitting all 8 upstream sites would make a PR's mergeability depend on their availability.
-- `.github/workflows/gh-pages.yaml` runs the real scrape on `push` to `main` and on the 12-hour cron, then publishes `feeds/` to Pages. It also runs on `pull_request` with the artifact upload and the `publish` job skipped, so a PR never touches Pages.
+- `.github/workflows/ci.yaml` runs on `pull_request` — lint, format check, mypy, pytest. Its job is named `check` and is the **required status check** on `main`; renaming it silently drops the gate and lets Dependabot auto-merge unvalidated PRs. It deliberately does **not** run `uv run main.py`: hitting all 8 upstream sites would make a PR's mergeability depend on their availability, which matters now that Dependabot PRs auto-merge.
+- `.github/workflows/gh-pages.yaml` runs the real scrape on `push` to `main`, on the 12-hour cron, and on `workflow_dispatch`, then publishes `feeds/` to Pages. It does not run on `pull_request` at all — that is ci.yaml's job. `notify-failure` opens a tracking issue when a *scheduled* run fails, and `track-problems` opens/updates/closes one from `main.py`'s `problems` step output.
+- `.github/workflows/dependabot-auto-merge.yaml` enables auto-merge on non-major Dependabot PRs. It runs on `pull_request_target` with a write token, so it must never check out or execute PR code — validation belongs to ci.yaml. `--admin` is deliberately absent so branch protection still gates the merge.
 
-Both resolve the pinned uv version through `.github/scripts/resolve-uv-version.sh` so the two workflows cannot drift; `tests/test_resolve_uv_version.py` pins that script's contract.
+ci.yaml and gh-pages.yaml resolve the pinned uv version through `.github/scripts/resolve-uv-version.sh` so they cannot drift; `tests/test_resolve_uv_version.py` pins that script's contract.
 
 ## Architecture Notes
 
@@ -55,7 +56,7 @@ Both resolve the pinned uv version through `.github/scripts/resolve-uv-version.s
 - All entries are added to a single `feedgenerator.Atom1Feed` with a constant `updateddate` of `2025-01-01`. This is intentional: the feed exists to advertise per-series subscription URLs, not to signal "new" series — readers should not re-fetch entries on date changes.
 - `feeds/.gitkeep` is the only checked-in file under `feeds/`. The generated `rss.xml` and `index.html` are never committed; they live only as the Pages artifact.
 - `_dedupe()` is required because some series pages render the same series in multiple sections (e.g. recommended + alphabetical).
-- `report()` prints a per-publisher series count and emits a `[WARN]` (plus a GitHub Actions `::warning::` annotation under CI) for any publisher that yielded nothing, and `emit_github_output()` puts the same list on the step's `problems` output for the workflow to act on. `scrape()` only swallows exceptions, so a selector that stops matching produces zero items and no error — コミックガルド silently dropped out of the feed that way. The run deliberately still exits 0 so a single broken publisher does not block publishing the other seven; that also means `failure()`-conditioned notifications cannot see this case, hence the separate `problems` output.
+- `report()` prints a per-publisher series count and emits a `[WARN]` (plus a GitHub Actions `::warning::` annotation under CI) for any publisher that yielded nothing, and `emit_github_output()` puts the same list on the step's `problems` output, which the `track-problems` job turns into a tracking issue (and closes again once every publisher is back). `scrape()` only swallows exceptions, so a selector that stops matching produces zero items and no error — コミックガルド silently dropped out of the feed that way. The run deliberately still exits 0 so a single broken publisher does not block publishing the other seven; that also means `failure()`-conditioned notifications cannot see this case, hence the separate `problems` output.
 - `tests/fixtures/*.html` are real excerpts (3 matching elements each) cut from the live listing pages, and `tests/fixtures/expected.json` is the snapshot read from them. Hand-written HTML would not catch the one failure mode this project actually has: upstream quietly changing its markup.
 
 ## When Adding a New Publisher
