@@ -80,31 +80,34 @@ def test_one_broken_publisher_does_not_stop_the_others(
     assert f"<h2>{main.PUBLISHERS[1].label}</h2>" in index
 
 
-def test_reports_problems_to_the_workflow(
+def test_zero_hits_are_annotated_for_actions(
     workspace: Path,
     all_publishers_served: Mocker,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """0 件は run を落とさないので、ワークフローが拾えるよう出力に載せる。"""
+    """0 件は run を落とさないので、Actions のアノテーションが唯一の可視化経路。"""
     silent = main.PUBLISHERS[5]
     all_publishers_served.get(silent.list_url, text="<html><body></body></html>")
-    github_output = workspace / "github_output"
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
 
     assert main.main() == 0
 
-    assert f"::warning title={silent.label}::0 件" in capsys.readouterr().out
-    assert github_output.read_text(encoding="utf-8") == f"problems={silent.label}\n"
+    captured = capsys.readouterr()
+    assert f"::warning title={silent.label}::0 件" in captured.out
+    assert f"[WARN] {silent.label}: 0 件" in captured.err
+    index = (workspace / "feeds" / "index.html").read_text(encoding="utf-8")
+    assert f"<h2>{silent.label}</h2>" in index
 
 
-def test_reports_no_problems_when_every_publisher_is_healthy(
+def test_healthy_run_emits_no_warnings(
     workspace: Path,
     all_publishers_served: Mocker,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    github_output = workspace / "github_output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     assert main.main() == 0
-    assert github_output.read_text(encoding="utf-8") == "problems=\n"
+    captured = capsys.readouterr()
+    assert "::warning" not in captured.out
+    assert captured.err == ""

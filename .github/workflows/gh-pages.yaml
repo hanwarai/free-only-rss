@@ -23,8 +23,6 @@ jobs:
     # 中途半端な状態で残りうるので、後続の run は待たせる。
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
-    outputs:
-      problems: ${{ steps.scrape.outputs.problems }}
     steps:
       - uses: actions/checkout@v7
 
@@ -59,9 +57,8 @@ jobs:
         run: uv run pytest
 
       # main.py は 1 社壊れても残り 7 社を配信するため exit 0 で終わる。
-      # 欠落した出版社は problems 出力に載るので track-problems ジョブが拾う。
+      # 欠落した出版社はログの [WARN] と ::warning:: アノテーションに出る。
       - name: Run main.py
-        id: scrape
         run: uv run main.py
 
       - name: Upload Pages artifact
@@ -82,54 +79,6 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
-
-  # 出版社の欠落は run を落とさない (落とすと残り 7 社も配信できなくなる) ので、
-  # failure() を条件にした通知では拾えない。ここで Issue として可視化する。
-  track-problems:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Open, update or close the tracking issue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          PROBLEMS: ${{ needs.build.outputs.problems }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          ISSUE_TITLE: "一部の出版社がフィードから欠落している"
-          ISSUE_LABEL: scrape-problem
-        run: |
-          set -euo pipefail
-          existing="$(gh issue list --state open --label "$ISSUE_LABEL" \
-            --search "$ISSUE_TITLE in:title" --json number --jq '.[0].number // empty')"
-
-          if [ -z "$PROBLEMS" ]; then
-            if [ -n "$existing" ]; then
-              gh issue comment "$existing" --body "全出版社が復旧した ([run]($RUN_URL))。"
-              gh issue close "$existing"
-            fi
-            exit 0
-          fi
-
-          # 同じ顔ぶれのまま 12 時間ごとにコメントが積むのを防ぐマーカー。
-          marker="<!-- problems: $PROBLEMS -->"
-          body=$(printf '%s\n\n%s\n\n%s\n' \
-            "次の出版社がフィードから欠落している: \`$PROBLEMS\`" \
-            "0 件なら selector が上流の HTML 変更で外れた可能性、取得失敗ならログの [ERROR] を参照。詳細は [run]($RUN_URL)。" \
-            "$marker")
-
-          if [ -z "$existing" ]; then
-            gh label create "$ISSUE_LABEL" --color B60205 --description "scrape yielded nothing" 2>/dev/null || true
-            gh issue create --title "$ISSUE_TITLE" --label "$ISSUE_LABEL" --body "$body"
-            exit 0
-          fi
-
-          last="$(gh issue view "$existing" --json body,comments --jq '[.body] + [.comments[].body] | last')"
-          case "$last" in
-            *"$marker"*) echo "::notice::同じ顔ぶれを報告済みのため #$existing にはコメントしない" ;;
-            *) gh issue comment "$existing" --body "$body" ;;
-          esac
 
   notify-failure:
     needs: [build, publish]

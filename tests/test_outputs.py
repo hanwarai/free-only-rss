@@ -1,9 +1,6 @@
-"""生成物の書き出しと、ワークフローへの受け渡し。"""
+"""生成物の書き出し。"""
 
-import os
 from pathlib import Path
-
-import pytest
 
 import main
 
@@ -46,32 +43,3 @@ def test_index_escapes_series_titles(tmp_path: Path) -> None:
     index = (tmp_path / "feeds" / "index.html").read_text(encoding="utf-8")
     assert "<script>x</script>" not in index
     assert "&lt;script&gt;" in index
-
-
-def test_emit_github_output_appends_problem_list(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    output = tmp_path / "github_output"
-    output.write_text("existing=1\n", encoding="utf-8")
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    main.emit_github_output(["コミックガルド", "Webアクション"])
-    written = output.read_text(encoding="utf-8")
-    assert written == "existing=1\nproblems=コミックガルド,Webアクション\n"
-
-
-def test_emit_github_output_writes_an_empty_value_when_healthy(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ワークフロー側が「キーが無い」と「問題なし」を区別しなくて済むようにする。"""
-    output = tmp_path / "github_output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    main.emit_github_output([])
-    assert output.read_text(encoding="utf-8") == "problems=\n"
-
-
-def test_emit_github_output_is_a_noop_outside_actions(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    main.emit_github_output(["コミックガルド"])
-    assert "GITHUB_OUTPUT" not in os.environ
