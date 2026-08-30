@@ -2,7 +2,6 @@
 name = "freeonly-rss"
 version = "0.1.0"
 description = "Atom feed of per-series ?free_only=1 RSS URLs for 8 Japanese web-manga publishers"
-readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "beautifulsoup4>=4.15.0",
