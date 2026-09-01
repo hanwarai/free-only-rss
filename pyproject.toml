@@ -14,7 +14,7 @@ dependencies = [
 # uv 本体のバージョンピン。Dependabot (uv エコシステム) がこの行を bump し、
 # CI (.github/scripts/resolve-uv-version.sh) が setup-uv に渡す version をここから読む。
 # 既定グループではないため `uv sync` で venv にはインストールされない。
-ci = ["uv==0.12.6"]
+ci = ["uv==0.12.7"]
 
 [project.optional-dependencies]
 dev = [
