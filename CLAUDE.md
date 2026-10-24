@@ -42,7 +42,7 @@ Three workflows:
 
 - `.github/workflows/ci.yaml` runs on `pull_request` — lint, format check, mypy, pytest. Its job is named `check` and is the **required status check** on `main`; renaming it silently drops the gate and lets Dependabot auto-merge unvalidated PRs. It deliberately does **not** run `uv run main.py`: hitting all 8 upstream sites would make a PR's mergeability depend on their availability, which matters now that Dependabot PRs auto-merge.
 - `.github/workflows/gh-pages.yaml` runs the real scrape on `push` to `main`, on the 12-hour cron, and on `workflow_dispatch`, then publishes `feeds/` to Pages. It does not run on `pull_request` at all — that is ci.yaml's job. `notify-failure` opens a tracking issue when a *scheduled* run fails.
-- `.github/workflows/dependabot-auto-merge.yaml` enables auto-merge on non-major Dependabot PRs. It runs on `pull_request_target` with a write token, so it must never check out or execute PR code — validation belongs to ci.yaml. `--admin` is deliberately absent so branch protection still gates the merge.
+- `.github/workflows/dependabot-auto-merge.yaml` enables auto-merge on non-major Dependabot PRs, plus `certifi` / `tzdata` even when major (they use date versioning, so a year rollover is classified as semver-major; the match on `dependency-names` is exact). It runs on `pull_request_target` with a write token, so it must never check out or execute PR code — validation belongs to ci.yaml. `--admin` is deliberately absent so branch protection still gates the merge.
 
 ci.yaml and gh-pages.yaml resolve the pinned uv version through `.github/scripts/resolve-uv-version.sh` so they cannot drift; `tests/test_resolve_uv_version.py` pins that script's contract.
 
